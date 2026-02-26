@@ -42,7 +42,7 @@ class SearchRequest(BaseModel):
 
 def get_query_embedding(query_text):
     result = genai.embed_content(
-        model="models/text-embedding-004", content=query_text, task_type="retrieval_query" 
+        model="models/gemini-embedding-001", content=query_text, task_type="retrieval_query" 
     )
     return result['embedding']
 
@@ -87,6 +87,7 @@ async def search_jobs_api(request: SearchRequest):
         # ÉP TRẢ VỀ LỖI BẰNG JSON ĐỂ TRÌNH DUYỆT KHÔNG BÁO CORS
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") # Dòng này in ra log Render
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
+
 
 
 
