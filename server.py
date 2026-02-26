@@ -29,7 +29,7 @@ if os.path.exists(RAW_DATA_FILE):
 
 app = FastAPI(title="Ferrant API")
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
 )
 # Cổng chào để Render Health Check không bị lỗi 404
 @app.get("/")
@@ -84,4 +84,5 @@ async def search_jobs_api(request: SearchRequest):
         return {"status": "success", "data": jobs_data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
