@@ -1,1 +1,5 @@
-fastapi uvicorn pydantic chromadb google-generativeai
+fastapi
+uvicorn
+pydantic
+chromadb
+google-generativeai
