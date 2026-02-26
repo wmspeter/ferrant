@@ -31,7 +31,10 @@ app = FastAPI(title="Ferrant API")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
-
+# Cổng chào để Render Health Check không bị lỗi 404
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -81,3 +84,4 @@ async def search_jobs_api(request: SearchRequest):
         return {"status": "success", "data": jobs_data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
