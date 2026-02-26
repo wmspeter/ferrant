@@ -32,7 +32,8 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
 )
 # Cổng chào để Render Health Check không bị lỗi 404
-@app.get("/")
+# Cổng chào mở cho cả GET và HEAD để Render không báo lỗi 405
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
 class SearchRequest(BaseModel):
@@ -86,5 +87,6 @@ async def search_jobs_api(request: SearchRequest):
         # ÉP TRẢ VỀ LỖI BẰNG JSON ĐỂ TRÌNH DUYỆT KHÔNG BÁO CORS
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") # Dòng này in ra log Render
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
+
 
 
