@@ -83,6 +83,8 @@ async def search_jobs_api(request: SearchRequest):
             
         return {"status": "success", "data": jobs_data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # ÉP TRẢ VỀ LỖI BẰNG JSON ĐỂ TRÌNH DUYỆT KHÔNG BÁO CORS
+        print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") # Dòng này in ra log Render
+        return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
 
 
