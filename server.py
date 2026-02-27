@@ -5,7 +5,7 @@ import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+from functools import lru_cache
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
@@ -40,29 +40,46 @@ async def root():
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
+@lru_cache(maxsize=1000)
 def enhance_query_with_gemini(user_query):
-    """Dùng Gemini Flash để sửa chính tả và mở rộng từ khóa chuyên ngành IT"""
+    """Dùng Gemini Flash với Cache và bắt lỗi 'cạn lời'"""
     try:
-        # Dùng bản flash cho tốc độ xử lý siêu nhanh (chỉ tốn khoảng 0.5s - 1s)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = f'''Bạn là một chuyên gia Headhunter mảng IT. 
-        Khách hàng đang tìm việc với yêu cầu: "{user_query}"
+        # Thêm 1 câu dặn dò (Quy tắc số 2) để trị bệnh im lặng
+        prompt = f"""Ngữ cảnh: Tìm việc IT.
+        Yêu cầu người dùng: "{user_query}"
         
-        Nhiệm vụ của bạn:
-        1. Sửa lỗi chính tả nếu có.
-        2. Chuyển đổi các từ lóng sang ngôn ngữ chuyên ngành (Ví dụ: "giao diện" -> "frontend, UI/UX, React, Web", "mới ra trường" -> "fresher, junior, không yêu cầu kinh nghiệm").
-        3. CHỈ TRẢ VỀ một chuỗi các từ khóa cách nhau bằng dấu phẩy, KHÔNG giải thích, KHÔNG chào hỏi.
-        '''
+        Nhiệm vụ: Trích xuất và mở rộng các từ khóa chuyên ngành IT từ yêu cầu trên.
+        Quy tắc: 
+        1. Chỉ trả về chuỗi từ khóa (VD: frontend, React, HTML). Tuyệt đối không giải thích.
+        2. Nếu câu hỏi là lời chào (hello, hi) hoặc không có từ khóa IT nào, hãy trả về chính xác câu gốc của người dùng.
+        """
         
-        response = model.generate_content(prompt)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=40,
+                temperature=0.1,
+            )
+        )
+        
+        # Chặn đứng lỗi "cạn lời": Kiểm tra xem nó có nhả ra cái "Part" nào không
+        if not response.parts:
+            return user_query
+            
         enhanced_query = response.text.strip()
         
-        print(f"[AI Tối ưu] Gốc: '{user_query}' ---> Mới: '{enhanced_query}'")
+        # Tránh trường hợp nó nhả ra chuỗi rỗng
+        if not enhanced_query:
+            return user_query
+            
+        print(f"[CACHE MISS] Vừa hỏi Gemini: '{user_query}' ---> '{enhanced_query}'")
         return enhanced_query
+        
     except Exception as e:
-        print(f"Lỗi khi gọi Gemini enhance: {e}")
-        # Nếu lỗi (mạng/API), trả về câu gốc để hệ thống không bị sập
+        # Nếu có bất kỳ lỗi gì khác, cứ âm thầm dùng lại câu gốc
+        print(f"Lỗi Gemini: {e}")
         return user_query
 
 
@@ -117,6 +134,7 @@ async def search_jobs_api(request: SearchRequest):
         # ÉP TRẢ VỀ LỖI BẰNG JSON ĐỂ TRÌNH DUYỆT KHÔNG BÁO CORS
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") # Dòng này in ra log Render
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
+
 
 
 
