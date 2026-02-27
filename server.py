@@ -46,14 +46,14 @@ def enhance_query_with_gemini(user_query):
         # Dùng bản flash cho tốc độ xử lý siêu nhanh (chỉ tốn khoảng 0.5s - 1s)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        prompt = f""'Bạn là một chuyên gia Headhunter mảng IT. 
+        prompt = f'''Bạn là một chuyên gia Headhunter mảng IT. 
         Khách hàng đang tìm việc với yêu cầu: "{user_query}"
         
         Nhiệm vụ của bạn:
         1. Sửa lỗi chính tả nếu có.
         2. Chuyển đổi các từ lóng sang ngôn ngữ chuyên ngành (Ví dụ: "giao diện" -> "frontend, UI/UX, React, Web", "mới ra trường" -> "fresher, junior, không yêu cầu kinh nghiệm").
         3. CHỈ TRẢ VỀ một chuỗi các từ khóa cách nhau bằng dấu phẩy, KHÔNG giải thích, KHÔNG chào hỏi.
-        """
+        '''
         
         response = model.generate_content(prompt)
         enhanced_query = response.text.strip()
@@ -117,6 +117,7 @@ async def search_jobs_api(request: SearchRequest):
         # ÉP TRẢ VỀ LỖI BẰNG JSON ĐỂ TRÌNH DUYỆT KHÔNG BÁO CORS
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") # Dòng này in ra log Render
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
+
 
 
 
