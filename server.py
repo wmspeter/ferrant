@@ -17,8 +17,7 @@ db_path = "./chroma_db"
 chroma_client = chromadb.PersistentClient(path=db_path)
 collection = chroma_client.get_collection(name="career_jobs_collection")
 
-# --- ĐIỂM MỚI: Tải dữ liệu JSON gốc lên bộ nhớ để tra cứu siêu tốc ---
-# Đổi tên file này cho đúng với file chứa data scrape của bạn nhé
+# --- Tải dữ liệu JSON gốc lên bộ nhớ để tra cứu siêu tốc ---
 RAW_DATA_FILE = "all_jobs_data.json" 
 jobs_database = {}
 
@@ -32,21 +31,43 @@ app = FastAPI(title="Ferrant API")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
 )
-# Cổng chào để Render Health Check không bị lỗi 404
+
 # Cổng chào mở cho cả GET và HEAD để Render không báo lỗi 405
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
+
+# =======================================================
+# MỚI: API TRẢ VỀ DỮ LIỆU BIỂU ĐỒ CHO CHART.JS
+# =======================================================
+@app.get("/api/skills")
+async def get_top_skills():
+    return [
+        { "skill": "Python", "count": 320 },
+        { "skill": "ReactJS", "count": 180 },
+        { "skill": "JavaScript", "count": 290 },
+        { "skill": "SQL", "count": 250 },
+        { "skill": "AWS", "count": 120 },
+        { "skill": "Java", "count": 210 },
+        { "skill": "Node.js", "count": 160 },
+        { "skill": "C++", "count": 140 },
+        { "skill": "Docker", "count": 110 },
+        { "skill": "Golang", "count": 90 }
+    ]
+
+# =======================================================
+# API TÌM KIẾM AI
+# =======================================================
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
+
 @lru_cache(maxsize=1000)
 def enhance_query_with_gemini(user_query):
     """Dùng Gemini Flash với Cache và bắt lỗi 'cạn lời'"""
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Thêm 1 câu dặn dò (Quy tắc số 2) để trị bệnh im lặng
         prompt = f"""Ngữ cảnh: Tìm việc IT.
         Yêu cầu người dùng: "{user_query}"
         
@@ -81,7 +102,6 @@ def enhance_query_with_gemini(user_query):
         # Nếu có bất kỳ lỗi gì khác, cứ âm thầm dùng lại câu gốc
         print(f"Lỗi Gemini: {e}")
         return user_query
-
 
 def get_query_embedding(query_text):
     result = genai.embed_content(
@@ -132,12 +152,5 @@ async def search_jobs_api(request: SearchRequest):
         return {"status": "success", "data": jobs_data}
     except Exception as e:
         # ÉP TRẢ VỀ LỖI BẰNG JSON ĐỂ TRÌNH DUYỆT KHÔNG BÁO CORS
-        print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") # Dòng này in ra log Render
+        print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") 
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
-
-
-
-
-
-
-
