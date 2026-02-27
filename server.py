@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from functools import lru_cache
+from collections import Counter # <-- MỚI: Dùng để đếm tần suất kỹ năng
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
@@ -38,22 +39,49 @@ async def root():
     return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
 
 # =======================================================
-# MỚI: API TRẢ VỀ DỮ LIỆU BIỂU ĐỒ CHO CHART.JS
+# MỚI: API TRẢ VỀ DỮ LIỆU BIỂU ĐỒ CHO CHART.JS TỪ DB
 # =======================================================
 @app.get("/api/skills")
-async def get_top_skills():
-    return [
-        { "skill": "Python", "count": 320 },
-        { "skill": "ReactJS", "count": 180 },
-        { "skill": "JavaScript", "count": 290 },
-        { "skill": "SQL", "count": 250 },
-        { "skill": "AWS", "count": 120 },
-        { "skill": "Java", "count": 210 },
-        { "skill": "Node.js", "count": 160 },
-        { "skill": "C++", "count": 140 },
-        { "skill": "Docker", "count": 110 },
-        { "skill": "Golang", "count": 90 }
-    ]
+async def get_top_skills(query: str = ""):
+    try:
+        # Nếu không có từ khóa, trả về mảng rỗng
+        if not query.strip():
+            return {"status": "success", "data": []}
+
+        # 1. Dùng Gemini Flash "dịch" từ khóa giống hệt hàm search
+        smart_query = enhance_query_with_gemini(query)
+        
+        # 2. Tạo vector từ khóa
+        query_vector = get_query_embedding(smart_query)
+        
+        # 3. Lấy top 50 công việc sát nhất để làm mẫu thống kê kỹ năng
+        results = collection.query(query_embeddings=[query_vector], n_results=50)
+        
+        if not results['metadatas'] or not results['metadatas'][0]:
+            return {"status": "success", "data": []}
+            
+        skill_counter = Counter()
+        
+        # 4. Quét qua các công việc tìm được, bóc tách và đếm kỹ năng
+        for metadata in results['metadatas'][0]:
+            skills_str = metadata.get('skills', '')
+            if skills_str:
+                # Tách các kỹ năng bằng dấu phẩy và xóa khoảng trắng thừa
+                job_skills = [s.strip() for s in skills_str.split(',') if s.strip()]
+                for skill in job_skills:
+                    skill_counter[skill] += 1
+                    
+        # 5. Lấy top 10 kỹ năng phổ biến nhất
+        top_skills = skill_counter.most_common(10)
+        
+        # 6. Format lại dữ liệu để trả về dạng mảng Dictionary chuẩn
+        response_data = [{"skill": skill, "count": count} for skill, count in top_skills]
+        
+        return {"status": "success", "data": response_data}
+        
+    except Exception as e:
+        print(f"LỖI NGẦM TẠI API SKILLS: {str(e)}")
+        return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
 
 # =======================================================
 # API TÌM KIẾM AI
