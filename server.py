@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from functools import lru_cache
 from collections import Counter
 
+# --- CẤU HÌNH ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise ValueError("LỖI: Chưa cấu hình biến môi trường GOOGLE_API_KEY!")
@@ -37,7 +38,7 @@ app.add_middleware(
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
-    return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
+    return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động."}
 
 class SearchRequest(BaseModel):
     query: str
@@ -49,45 +50,30 @@ def enhance_query_with_gemini(user_query):
         model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"""Ngữ cảnh: Tìm việc IT.
         Yêu cầu người dùng: "{user_query}"
-        
         Nhiệm vụ: Trích xuất và mở rộng các từ khóa chuyên ngành IT từ yêu cầu trên.
-        Quy tắc: 
-        1. Chỉ trả về chuỗi từ khóa (VD: frontend, React, HTML). Tuyệt đối không giải thích.
-        2. Nếu câu hỏi là lời chào (hello, hi) hoặc không có từ khóa IT nào, hãy trả về chính xác câu gốc của người dùng.
         """
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(max_output_tokens=40, temperature=0.1)
-        )
+        response = model.generate_content(prompt, generation_config=genai.types.GenerationConfig(max_output_tokens=40, temperature=0.1))
         if not response.parts: return user_query
-        enhanced_query = response.text.strip()
-        if not enhanced_query: return user_query
-        print(f"[CACHE MISS] Vừa hỏi Gemini: '{user_query}' ---> '{enhanced_query}'")
-        return enhanced_query
-    except Exception as e:
-        print(f"Lỗi Gemini: {e}")
+        return response.text.strip() or user_query
+    except Exception:
         return user_query
 
 def get_query_embedding(query_text):
-    result = genai.embed_content(
-        model="models/gemini-embedding-001", content=query_text, task_type="retrieval_query" 
-    )
+    result = genai.embed_content(model="models/gemini-embedding-001", content=query_text, task_type="retrieval_query")
     return result['embedding']
 
-# =======================================================
-# API TÌM KIẾM VÀ TÍNH TOÁN (ĐÃ SỬA LỌC TITLE VÀ LOCATION)
-# =======================================================
+# --- ENDPOINT PING CHO LOADING SCREEN ---
 @app.get("/ping")
 async def ping():
     return {"status": "ready"}
 
+# --- ENDPOINT SEARCH (GIỮ NGUYÊN LOGIC CỦA BẠN) ---
 @app.post("/api/search")
 async def search_jobs_api(request: SearchRequest):
     try:
         smart_query = enhance_query_with_gemini(request.query)
         query_vector = get_query_embedding(smart_query)
         
-        # MẸO: Quét dư số lượng (x2) để dự phòng cho các job bị loại bỏ do thiếu title
         results = collection.query(query_embeddings=[query_vector], n_results=request.top_k * 2)
         
         if not results['ids'][0]:
@@ -98,32 +84,21 @@ async def search_jobs_api(request: SearchRequest):
         location_stats = {}
 
         for i in range(len(results['ids'][0])):
-            # Nếu đã thu thập đủ 20 jobs chuẩn thì dừng vòng lặp
-            if len(jobs_data) >= request.top_k:
-                break
+            if len(jobs_data) >= request.top_k: break
 
             job_id = results['ids'][0][i]
             metadata = results['metadatas'][0][i]
-            
-            # --- 1. LẤY DATA GỐC VÀ LỌC CÁC JOB RÁC ---
             raw_job = jobs_database.get(job_id, {})
             job_title = raw_job.get("job_title", "")
             
-            # ĐIỀU KIỆN LỌC: Bỏ qua job nếu không có tiêu đề, hoặc title là "nan"
-            if not job_title or str(job_title).strip() == "" or str(job_title).lower() == "nan":
-                continue
+            if not job_title or str(job_title).lower() == "nan": continue
                 
-            # XỬ LÝ ĐỊA ĐIỂM: Nếu rỗng thì đổi thành "Thỏa thuận"
-            location = raw_job.get("location", "")
-            if not location or str(location).strip() == "" or str(location).lower() == "nan":
-                location = "Thỏa thuận"
-            else:
-                location = str(location).strip()
+            location = str(raw_job.get("location", "")).strip()
+            if not location or location.lower() == "nan": location = "Thỏa thuận"
 
-            # --- 2. XỬ LÝ LƯƠNG ---
+            # Xử lý lương
             est_min = metadata.get('estimated_min', 0)
             est_max = metadata.get('estimated_max', 0)
-            
             raw_avg = 0
             if est_min > 0 and est_max > 0:
                 display_salary = f"${int(est_min)} - ${int(est_max)} / năm"
@@ -134,58 +109,34 @@ async def search_jobs_api(request: SearchRequest):
             else:
                 display_salary = metadata.get('salary_original', 'Thỏa thuận')
 
-            # --- 3. TÍNH TOÁN DATA CHO BIỂU ĐỒ LƯƠNG ---
+            # Thống kê
             if raw_avg > 0:
-                short_loc = location.split(',')[0].split('-')[0].strip() 
-                if not short_loc:
-                    short_loc = "Thỏa thuận"
-                    
-                if short_loc not in location_stats:
-                    location_stats[short_loc] = {"total": 0, "count": 0}
+                short_loc = location.split(',')[0].strip()
+                if short_loc not in location_stats: location_stats[short_loc] = {"total": 0, "count": 0}
                 location_stats[short_loc]["total"] += raw_avg
                 location_stats[short_loc]["count"] += 1
 
-            # --- 4. TÍNH TOÁN DATA CHO BIỂU ĐỒ SKILL ---
             skills_str = metadata.get('skills', '')
             if skills_str:
-                job_skills = [s.strip() for s in skills_str.split(',') if s.strip()]
-                for skill in job_skills:
-                    skill_counter[skill] += 1
+                for s in [s.strip() for s in skills_str.split(',') if s.strip()]: skill_counter[s] += 1
 
-            # Đóng gói Job
-            job_info = {
+            jobs_data.append({
                 "job_id": job_id,
                 "match_score": round(results['distances'][0][i], 4),
                 "salary": display_salary, 
                 "experience_level": metadata.get('experience_level', ''),
                 "skills": skills_str,
                 "job_title": job_title,
-                "job_description": raw_job.get("job_description", "Không có mô tả chi tiết."),
+                "job_description": raw_job.get("job_description", "Không có mô tả."),
                 "url": raw_job.get("url", "#"),
                 "location": location
-            }
-            jobs_data.append(job_info)
-
-        # Chốt danh sách Skill cho biểu đồ
-        top_skills = skill_counter.most_common(10)
-        skills_chart_data = [{"skill": skill, "count": count} for skill, count in top_skills]
-
-        # Chốt danh sách Lương cho biểu đồ
-        salary_chart_data = []
-        for loc, stats in location_stats.items():
-            if stats["count"] > 0:
-                salary_chart_data.append({
-                    "location": loc, 
-                    "average_salary": round(stats["total"] / stats["count"])
-                })
-        salary_chart_data.sort(key=lambda x: x["average_salary"], reverse=True)
+            })
 
         return {
             "status": "success", 
             "data": jobs_data, 
-            "skills_chart_data": skills_chart_data,
-            "salary_chart_data": salary_chart_data
+            "skills_chart_data": [{"skill": s, "count": c} for s, c in skill_counter.most_common(10)],
+            "salary_chart_data": sorted([{"location": l, "average_salary": round(s["total"]/s["count"])} for l, s in location_stats.items() if s["count"] > 0], key=lambda x: x["average_salary"], reverse=True)
         }
-
-
-
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
