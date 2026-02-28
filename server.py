@@ -180,10 +180,11 @@ async def search_jobs_api(request: SearchRequest):
                 job_info["job_title"] = raw_job.get("job_title", job_info["job_title"])
                 job_info["job_description"] = raw_job.get("job_description", job_info["job_description"])
                 job_info["url"] = raw_job.get("url", job_info["url"])
-
+                job_info["location"] = raw_job.get("location", "Thỏa thuận")
             jobs_data.append(job_info)
             
         return {"status": "success", "data": jobs_data}
     except Exception as e:
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") 
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
+
