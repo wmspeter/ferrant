@@ -77,6 +77,10 @@ def get_query_embedding(query_text):
 # =======================================================
 # API TÌM KIẾM VÀ TÍNH TOÁN (ĐÃ SỬA LỌC TITLE VÀ LOCATION)
 # =======================================================
+@app.get("/ping")
+async def ping():
+    return {"status": "ready"}
+
 @app.post("/api/search")
 async def search_jobs_api(request: SearchRequest):
     try:
@@ -183,12 +187,5 @@ async def search_jobs_api(request: SearchRequest):
             "salary_chart_data": salary_chart_data
         }
 
-# Thêm endpoint này vào file server.py của bạn
-@app.get("/ping")
-async def ping():
-    return {"status": "ready"}
 
-    except Exception as e:
-        print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") 
-        return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
 
