@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from functools import lru_cache
-from collections import Counter # <-- MỚI: Dùng để đếm tần suất kỹ năng
+from collections import Counter
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
@@ -26,7 +26,10 @@ if os.path.exists(RAW_DATA_FILE):
     with open(RAW_DATA_FILE, 'r', encoding='utf-8') as f:
         raw_list = json.load(f)
         for job in raw_list:
-            jobs_database[job.get('id')] = job
+            # Lấy job_id hoặc id tùy thuộc vào cấu trúc file của bạn
+            job_id = job.get('job_id') or job.get('id')
+            if job_id:
+                jobs_database[str(job_id)] = job
 
 app = FastAPI(title="Ferrant API")
 app.add_middleware(
@@ -39,7 +42,7 @@ async def root():
     return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
 
 # =======================================================
-# MỚI: API TRẢ VỀ DỮ LIỆU BIỂU ĐỒ CHO CHART.JS TỪ DB
+# API TRẢ VỀ DỮ LIỆU BIỂU ĐỒ CHO CHART.JS TỪ DB
 # =======================================================
 @app.get("/api/skills")
 async def get_top_skills(query: str = ""):
@@ -66,7 +69,6 @@ async def get_top_skills(query: str = ""):
         for metadata in results['metadatas'][0]:
             skills_str = metadata.get('skills', '')
             if skills_str:
-                # Tách các kỹ năng bằng dấu phẩy và xóa khoảng trắng thừa
                 job_skills = [s.strip() for s in skills_str.split(',') if s.strip()]
                 for skill in job_skills:
                     skill_counter[skill] += 1
@@ -113,13 +115,11 @@ def enhance_query_with_gemini(user_query):
             )
         )
         
-        # Chặn đứng lỗi "cạn lời": Kiểm tra xem nó có nhả ra cái "Part" nào không
         if not response.parts:
             return user_query
             
         enhanced_query = response.text.strip()
         
-        # Tránh trường hợp nó nhả ra chuỗi rỗng
         if not enhanced_query:
             return user_query
             
@@ -127,7 +127,6 @@ def enhance_query_with_gemini(user_query):
         return enhanced_query
         
     except Exception as e:
-        # Nếu có bất kỳ lỗi gì khác, cứ âm thầm dùng lại câu gốc
         print(f"Lỗi Gemini: {e}")
         return user_query
 
@@ -140,13 +139,8 @@ def get_query_embedding(query_text):
 @app.post("/api/search")
 async def search_jobs_api(request: SearchRequest):
     try:
-        # 1. Nhờ Gemini Flash "dịch" và mở rộng câu hỏi
         smart_query = enhance_query_with_gemini(request.query)
-        
-        # 2. Mang câu hỏi đã được độ đi biến thành Vector
         query_vector = get_query_embedding(smart_query)
-        
-        # 3. Tìm kiếm trong ChromaDB
         results = collection.query(query_embeddings=[query_vector], n_results=request.top_k)
         
         if not results['ids'][0]:
@@ -155,20 +149,32 @@ async def search_jobs_api(request: SearchRequest):
         jobs_data = []
         for i in range(len(results['ids'][0])):
             job_id = results['ids'][0][i]
+            metadata = results['metadatas'][0][i]
             
-            # Khởi tạo data cơ bản từ DB
+            # --- XỬ LÝ LƯƠNG TỪ CHROMADB CHUẨN BỊ CHO GIAO DIỆN ---
+            est_min = metadata.get('estimated_min', 0)
+            est_max = metadata.get('estimated_max', 0)
+            
+            # Ưu tiên lấy số estimate, nếu không có mới dùng text gốc
+            if est_min > 0 and est_max > 0:
+                display_salary = f"${int(est_min)} - ${int(est_max)} / năm"
+            elif est_min > 0:
+                display_salary = f"Từ ${int(est_min)} / năm"
+            else:
+                display_salary = metadata.get('salary_original', 'Thỏa thuận')
+
             job_info = {
                 "job_id": job_id,
                 "match_score": round(results['distances'][0][i], 4),
-                "salary": results['metadatas'][0][i].get('salary'),
-                "experience_level": results['metadatas'][0][i].get('experience_level'),
-                "skills": results['metadatas'][0][i].get('skills'),
+                "salary": display_salary, # <-- Gắn thẳng chuỗi lương xịn sò vào đây
+                "experience_level": metadata.get('experience_level', ''),
+                "skills": metadata.get('skills', ''),
                 "job_title": "Chưa cập nhật",
                 "job_description": "Không có mô tả chi tiết.",
                 "url": "#"
             }
             
-            # Ghép nối data từ file gốc vào
+            # Ghép nối thêm các text dài từ file JSON gốc
             if job_id in jobs_database:
                 raw_job = jobs_database[job_id]
                 job_info["job_title"] = raw_job.get("job_title", job_info["job_title"])
@@ -179,6 +185,5 @@ async def search_jobs_api(request: SearchRequest):
             
         return {"status": "success", "data": jobs_data}
     except Exception as e:
-        # ÉP TRẢ VỀ LỖI BẰNG JSON ĐỂ TRÌNH DUYỆT KHÔNG BÁO CORS
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") 
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
