@@ -26,7 +26,6 @@ if os.path.exists(RAW_DATA_FILE):
     with open(RAW_DATA_FILE, 'r', encoding='utf-8') as f:
         raw_list = json.load(f)
         for job in raw_list:
-            # Lấy job_id hoặc id tùy thuộc vào cấu trúc file của bạn
             job_id = job.get('job_id') or job.get('id')
             if job_id:
                 jobs_database[str(job_id)] = job
@@ -36,28 +35,21 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
 )
 
-# Cổng chào mở cho cả GET và HEAD để Render không báo lỗi 405
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
 
 # =======================================================
-# API TRẢ VỀ DỮ LIỆU BIỂU ĐỒ CHO CHART.JS TỪ DB
+# API 1: TRẢ VỀ DỮ LIỆU BIỂU ĐỒ SKILL (CHART.JS)
 # =======================================================
 @app.get("/api/skills")
 async def get_top_skills(query: str = ""):
     try:
-        # Nếu không có từ khóa, trả về mảng rỗng
         if not query.strip():
             return {"status": "success", "data": []}
 
-        # 1. Dùng Gemini Flash "dịch" từ khóa giống hệt hàm search
         smart_query = enhance_query_with_gemini(query)
-        
-        # 2. Tạo vector từ khóa
         query_vector = get_query_embedding(smart_query)
-        
-        # 3. Lấy top 50 công việc sát nhất để làm mẫu thống kê kỹ năng
         results = collection.query(query_embeddings=[query_vector], n_results=50)
         
         if not results['metadatas'] or not results['metadatas'][0]:
@@ -65,7 +57,6 @@ async def get_top_skills(query: str = ""):
             
         skill_counter = Counter()
         
-        # 4. Quét qua các công việc tìm được, bóc tách và đếm kỹ năng
         for metadata in results['metadatas'][0]:
             skills_str = metadata.get('skills', '')
             if skills_str:
@@ -73,10 +64,7 @@ async def get_top_skills(query: str = ""):
                 for skill in job_skills:
                     skill_counter[skill] += 1
                     
-        # 5. Lấy top 10 kỹ năng phổ biến nhất
         top_skills = skill_counter.most_common(10)
-        
-        # 6. Format lại dữ liệu để trả về dạng mảng Dictionary chuẩn
         response_data = [{"skill": skill, "count": count} for skill, count in top_skills]
         
         return {"status": "success", "data": response_data}
@@ -86,7 +74,77 @@ async def get_top_skills(query: str = ""):
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
 
 # =======================================================
-# API TÌM KIẾM AI
+# API 2: TRẢ VỀ BIỂU ĐỒ LƯƠNG TRUNG BÌNH THEO KHU VỰC
+# =======================================================
+@app.get("/api/salary-by-location")
+async def get_salary_by_location(query: str = ""):
+    try:
+        if not query.strip():
+            return {"status": "success", "data": []}
+
+        smart_query = enhance_query_with_gemini(query)
+        query_vector = get_query_embedding(smart_query)
+        results = collection.query(query_embeddings=[query_vector], n_results=50)
+
+        if not results['metadatas'] or not results['metadatas'][0]:
+            return {"status": "success", "data": []}
+
+        location_stats = {}
+
+        for i in range(len(results['ids'][0])):
+            job_id = results['ids'][0][i]
+            metadata = results['metadatas'][0][i]
+
+            # Lấy vị trí từ DB trên RAM
+            location = "Khác"
+            if job_id in jobs_database:
+                location = jobs_database[job_id].get("location", "Khác")
+            if not location or location.strip() == "":
+                location = "Khác"
+            
+            # Nếu chuỗi địa điểm dài kiểu "Hà Nội, Hồ Chí Minh", chỉ lấy tỉnh đầu tiên cho biểu đồ bớt rối
+            location = location.split(',')[0].split('-')[0].strip()
+
+            est_min = metadata.get('estimated_min', 0)
+            est_max = metadata.get('estimated_max', 0)
+
+            # Bỏ qua các job không thể estimate ra số
+            if est_min <= 0 and est_max <= 0:
+                continue
+
+            # Tính mức lương trung bình của job này
+            if est_min > 0 and est_max > 0:
+                job_avg_salary = (est_min + est_max) / 2
+            else:
+                job_avg_salary = est_min if est_min > 0 else est_max
+
+            if location not in location_stats:
+                location_stats[location] = {"total": 0, "count": 0}
+
+            location_stats[location]["total"] += job_avg_salary
+            location_stats[location]["count"] += 1
+
+        # Tính trung bình cho từng tỉnh
+        response_data = []
+        for loc, stats in location_stats.items():
+            if stats["count"] > 0:
+                avg_province_salary = stats["total"] / stats["count"]
+                response_data.append({
+                    "location": loc, 
+                    "average_salary": round(avg_province_salary)
+                })
+
+        # Sắp xếp biểu đồ theo mức lương giảm dần
+        response_data.sort(key=lambda x: x["average_salary"], reverse=True)
+
+        return {"status": "success", "data": response_data}
+        
+    except Exception as e:
+        print(f"LỖI TẠI API SALARY: {str(e)}")
+        return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
+
+# =======================================================
+# API 3: TÌM KIẾM AI CHÍNH
 # =======================================================
 class SearchRequest(BaseModel):
     query: str
@@ -94,7 +152,6 @@ class SearchRequest(BaseModel):
 
 @lru_cache(maxsize=1000)
 def enhance_query_with_gemini(user_query):
-    """Dùng Gemini Flash với Cache và bắt lỗi 'cạn lời'"""
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         
@@ -119,7 +176,6 @@ def enhance_query_with_gemini(user_query):
             return user_query
             
         enhanced_query = response.text.strip()
-        
         if not enhanced_query:
             return user_query
             
@@ -151,11 +207,9 @@ async def search_jobs_api(request: SearchRequest):
             job_id = results['ids'][0][i]
             metadata = results['metadatas'][0][i]
             
-            # --- XỬ LÝ LƯƠNG TỪ CHROMADB CHUẨN BỊ CHO GIAO DIỆN ---
             est_min = metadata.get('estimated_min', 0)
             est_max = metadata.get('estimated_max', 0)
             
-            # Ưu tiên lấy số estimate, nếu không có mới dùng text gốc
             if est_min > 0 and est_max > 0:
                 display_salary = f"${int(est_min)} - ${int(est_max)} / năm"
             elif est_min > 0:
@@ -166,25 +220,25 @@ async def search_jobs_api(request: SearchRequest):
             job_info = {
                 "job_id": job_id,
                 "match_score": round(results['distances'][0][i], 4),
-                "salary": display_salary, # <-- Gắn thẳng chuỗi lương xịn sò vào đây
+                "salary": display_salary, 
                 "experience_level": metadata.get('experience_level', ''),
                 "skills": metadata.get('skills', ''),
                 "job_title": "Chưa cập nhật",
                 "job_description": "Không có mô tả chi tiết.",
-                "url": "#"
+                "url": "#",
+                "location": "Chưa cập nhật địa điểm"
             }
             
-            # Ghép nối thêm các text dài từ file JSON gốc
             if job_id in jobs_database:
                 raw_job = jobs_database[job_id]
                 job_info["job_title"] = raw_job.get("job_title", job_info["job_title"])
                 job_info["job_description"] = raw_job.get("job_description", job_info["job_description"])
                 job_info["url"] = raw_job.get("url", job_info["url"])
-                job_info["location"] = raw_job.get("location", "Thỏa thuận")
+                job_info["location"] = raw_job.get("location", "Chưa cập nhật địa điểm")
+
             jobs_data.append(job_info)
             
         return {"status": "success", "data": jobs_data}
     except Exception as e:
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") 
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
-
