@@ -39,113 +39,6 @@ app.add_middleware(
 async def root():
     return {"status": "ok", "message": "Xin chào! Ferrant API đang hoạt động cực kỳ ổn định."}
 
-# =======================================================
-# API 1: TRẢ VỀ DỮ LIỆU BIỂU ĐỒ SKILL (CHART.JS)
-# =======================================================
-@app.get("/api/skills")
-async def get_top_skills(query: str = ""):
-    try:
-        if not query.strip():
-            return {"status": "success", "data": []}
-
-        smart_query = enhance_query_with_gemini(query)
-        query_vector = get_query_embedding(smart_query)
-        results = collection.query(query_embeddings=[query_vector], n_results=50)
-        
-        if not results['metadatas'] or not results['metadatas'][0]:
-            return {"status": "success", "data": []}
-            
-        skill_counter = Counter()
-        
-        for metadata in results['metadatas'][0]:
-            skills_str = metadata.get('skills', '')
-            if skills_str:
-                job_skills = [s.strip() for s in skills_str.split(',') if s.strip()]
-                for skill in job_skills:
-                    skill_counter[skill] += 1
-                    
-        top_skills = skill_counter.most_common(10)
-        response_data = [{"skill": skill, "count": count} for skill, count in top_skills]
-        
-        return {"status": "success", "data": response_data}
-        
-    except Exception as e:
-        print(f"LỖI NGẦM TẠI API SKILLS: {str(e)}")
-        return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
-
-# =======================================================
-# API 2: TRẢ VỀ BIỂU ĐỒ LƯƠNG TRUNG BÌNH THEO KHU VỰC
-# =======================================================
-@app.get("/api/salary-by-location")
-async def get_salary_by_location(query: str = ""):
-    try:
-        if not query.strip():
-            return {"status": "success", "data": []}
-
-        smart_query = enhance_query_with_gemini(query)
-        query_vector = get_query_embedding(smart_query)
-        results = collection.query(query_embeddings=[query_vector], n_results=50)
-
-        if not results['metadatas'] or not results['metadatas'][0]:
-            return {"status": "success", "data": []}
-
-        location_stats = {}
-
-        for i in range(len(results['ids'][0])):
-            job_id = results['ids'][0][i]
-            metadata = results['metadatas'][0][i]
-
-            # Lấy vị trí từ DB trên RAM
-            location = "Khác"
-            if job_id in jobs_database:
-                location = jobs_database[job_id].get("location", "Khác")
-            if not location or location.strip() == "":
-                location = "Khác"
-            
-            # Nếu chuỗi địa điểm dài kiểu "Hà Nội, Hồ Chí Minh", chỉ lấy tỉnh đầu tiên cho biểu đồ bớt rối
-            location = location.split(',')[0].split('-')[0].strip()
-
-            est_min = metadata.get('estimated_min', 0)
-            est_max = metadata.get('estimated_max', 0)
-
-            # Bỏ qua các job không thể estimate ra số
-            if est_min <= 0 and est_max <= 0:
-                continue
-
-            # Tính mức lương trung bình của job này
-            if est_min > 0 and est_max > 0:
-                job_avg_salary = (est_min + est_max) / 2
-            else:
-                job_avg_salary = est_min if est_min > 0 else est_max
-
-            if location not in location_stats:
-                location_stats[location] = {"total": 0, "count": 0}
-
-            location_stats[location]["total"] += job_avg_salary
-            location_stats[location]["count"] += 1
-
-        # Tính trung bình cho từng tỉnh
-        response_data = []
-        for loc, stats in location_stats.items():
-            if stats["count"] > 0:
-                avg_province_salary = stats["total"] / stats["count"]
-                response_data.append({
-                    "location": loc, 
-                    "average_salary": round(avg_province_salary)
-                })
-
-        # Sắp xếp biểu đồ theo mức lương giảm dần
-        response_data.sort(key=lambda x: x["average_salary"], reverse=True)
-
-        return {"status": "success", "data": response_data}
-        
-    except Exception as e:
-        print(f"LỖI TẠI API SALARY: {str(e)}")
-        return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
-
-# =======================================================
-# API 3: TÌM KIẾM AI CHÍNH
-# =======================================================
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -154,7 +47,6 @@ class SearchRequest(BaseModel):
 def enhance_query_with_gemini(user_query):
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
         prompt = f"""Ngữ cảnh: Tìm việc IT.
         Yêu cầu người dùng: "{user_query}"
         
@@ -163,25 +55,15 @@ def enhance_query_with_gemini(user_query):
         1. Chỉ trả về chuỗi từ khóa (VD: frontend, React, HTML). Tuyệt đối không giải thích.
         2. Nếu câu hỏi là lời chào (hello, hi) hoặc không có từ khóa IT nào, hãy trả về chính xác câu gốc của người dùng.
         """
-        
         response = model.generate_content(
             prompt,
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=40,
-                temperature=0.1,
-            )
+            generation_config=genai.types.GenerationConfig(max_output_tokens=40, temperature=0.1)
         )
-        
-        if not response.parts:
-            return user_query
-            
+        if not response.parts: return user_query
         enhanced_query = response.text.strip()
-        if not enhanced_query:
-            return user_query
-            
+        if not enhanced_query: return user_query
         print(f"[CACHE MISS] Vừa hỏi Gemini: '{user_query}' ---> '{enhanced_query}'")
         return enhanced_query
-        
     except Exception as e:
         print(f"Lỗi Gemini: {e}")
         return user_query
@@ -192,6 +74,9 @@ def get_query_embedding(query_text):
     )
     return result['embedding']
 
+# =======================================================
+# API TÌM KIẾM AI TÍCH HỢP TÍNH TOÁN BIỂU ĐỒ TỪ 20 JOBS
+# =======================================================
 @app.post("/api/search")
 async def search_jobs_api(request: SearchRequest):
     try:
@@ -203,6 +88,9 @@ async def search_jobs_api(request: SearchRequest):
             return {"status": "success", "message": "Không tìm thấy", "data": []}
 
         jobs_data = []
+        skill_counter = Counter()
+        location_stats = {}
+
         for i in range(len(results['ids'][0])):
             job_id = results['ids'][0][i]
             metadata = results['metadatas'][0][i]
@@ -210,23 +98,48 @@ async def search_jobs_api(request: SearchRequest):
             est_min = metadata.get('estimated_min', 0)
             est_max = metadata.get('estimated_max', 0)
             
+            # Tính lương hiển thị và lương thô (để vẽ biểu đồ)
+            raw_avg = 0
             if est_min > 0 and est_max > 0:
                 display_salary = f"${int(est_min)} - ${int(est_max)} / năm"
+                raw_avg = (est_min + est_max) / 2
             elif est_min > 0:
                 display_salary = f"Từ ${int(est_min)} / năm"
+                raw_avg = est_min
             else:
                 display_salary = metadata.get('salary_original', 'Thỏa thuận')
 
+            # Lấy thông tin location từ DB RAM
+            location = "Chưa cập nhật địa điểm"
+            if job_id in jobs_database:
+                location = jobs_database[job_id].get("location", "Chưa cập nhật địa điểm")
+            
+            # --- 1. TÍNH TOÁN DATA CHO BIỂU ĐỒ LƯƠNG ---
+            if raw_avg > 0:
+                short_loc = location.split(',')[0].split('-')[0].strip() # Lấy tỉnh thành đầu tiên
+                if short_loc not in location_stats:
+                    location_stats[short_loc] = {"total": 0, "count": 0}
+                location_stats[short_loc]["total"] += raw_avg
+                location_stats[short_loc]["count"] += 1
+
+            # --- 2. TÍNH TOÁN DATA CHO BIỂU ĐỒ SKILL ---
+            skills_str = metadata.get('skills', '')
+            if skills_str:
+                job_skills = [s.strip() for s in skills_str.split(',') if s.strip()]
+                for skill in job_skills:
+                    skill_counter[skill] += 1
+
+            # Đóng gói Job
             job_info = {
                 "job_id": job_id,
                 "match_score": round(results['distances'][0][i], 4),
                 "salary": display_salary, 
                 "experience_level": metadata.get('experience_level', ''),
-                "skills": metadata.get('skills', ''),
+                "skills": skills_str,
                 "job_title": "Chưa cập nhật",
                 "job_description": "Không có mô tả chi tiết.",
                 "url": "#",
-                "location": "Chưa cập nhật địa điểm"
+                "location": location
             }
             
             if job_id in jobs_database:
@@ -234,11 +147,31 @@ async def search_jobs_api(request: SearchRequest):
                 job_info["job_title"] = raw_job.get("job_title", job_info["job_title"])
                 job_info["job_description"] = raw_job.get("job_description", job_info["job_description"])
                 job_info["url"] = raw_job.get("url", job_info["url"])
-                job_info["location"] = raw_job.get("location", "Chưa cập nhật địa điểm")
 
             jobs_data.append(job_info)
-            
-        return {"status": "success", "data": jobs_data}
+
+        # Chốt danh sách Skill cho biểu đồ
+        top_skills = skill_counter.most_common(10)
+        skills_chart_data = [{"skill": skill, "count": count} for skill, count in top_skills]
+
+        # Chốt danh sách Lương cho biểu đồ
+        salary_chart_data = []
+        for loc, stats in location_stats.items():
+            if stats["count"] > 0:
+                salary_chart_data.append({
+                    "location": loc, 
+                    "average_salary": round(stats["total"] / stats["count"])
+                })
+        salary_chart_data.sort(key=lambda x: x["average_salary"], reverse=True)
+
+        # Trả về TẤT CẢ trong 1 lần gọi API duy nhất!
+        return {
+            "status": "success", 
+            "data": jobs_data, 
+            "skills_chart_data": skills_chart_data,
+            "salary_chart_data": salary_chart_data
+        }
+
     except Exception as e:
         print(f"LỖI NGẦM TRÊN SERVER: {str(e)}") 
         return {"status": "error", "message": f"Lỗi server: {str(e)}", "data": []}
