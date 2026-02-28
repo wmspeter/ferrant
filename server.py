@@ -75,14 +75,16 @@ def get_query_embedding(query_text):
     return result['embedding']
 
 # =======================================================
-# API TÌM KIẾM AI TÍCH HỢP TÍNH TOÁN BIỂU ĐỒ TỪ 20 JOBS
+# API TÌM KIẾM VÀ TÍNH TOÁN (ĐÃ SỬA LỌC TITLE VÀ LOCATION)
 # =======================================================
 @app.post("/api/search")
 async def search_jobs_api(request: SearchRequest):
     try:
         smart_query = enhance_query_with_gemini(request.query)
         query_vector = get_query_embedding(smart_query)
-        results = collection.query(query_embeddings=[query_vector], n_results=request.top_k)
+        
+        # MẸO: Quét dư số lượng (x2) để dự phòng cho các job bị loại bỏ do thiếu title
+        results = collection.query(query_embeddings=[query_vector], n_results=request.top_k * 2)
         
         if not results['ids'][0]:
             return {"status": "success", "message": "Không tìm thấy", "data": []}
@@ -92,13 +94,32 @@ async def search_jobs_api(request: SearchRequest):
         location_stats = {}
 
         for i in range(len(results['ids'][0])):
+            # Nếu đã thu thập đủ 20 jobs chuẩn thì dừng vòng lặp
+            if len(jobs_data) >= request.top_k:
+                break
+
             job_id = results['ids'][0][i]
             metadata = results['metadatas'][0][i]
             
+            # --- 1. LẤY DATA GỐC VÀ LỌC CÁC JOB RÁC ---
+            raw_job = jobs_database.get(job_id, {})
+            job_title = raw_job.get("job_title", "")
+            
+            # ĐIỀU KIỆN LỌC: Bỏ qua job nếu không có tiêu đề, hoặc title là "nan"
+            if not job_title or str(job_title).strip() == "" or str(job_title).lower() == "nan":
+                continue
+                
+            # XỬ LÝ ĐỊA ĐIỂM: Nếu rỗng thì đổi thành "Thỏa thuận"
+            location = raw_job.get("location", "")
+            if not location or str(location).strip() == "" or str(location).lower() == "nan":
+                location = "Thỏa thuận"
+            else:
+                location = str(location).strip()
+
+            # --- 2. XỬ LÝ LƯƠNG ---
             est_min = metadata.get('estimated_min', 0)
             est_max = metadata.get('estimated_max', 0)
             
-            # Tính lương hiển thị và lương thô (để vẽ biểu đồ)
             raw_avg = 0
             if est_min > 0 and est_max > 0:
                 display_salary = f"${int(est_min)} - ${int(est_max)} / năm"
@@ -109,20 +130,18 @@ async def search_jobs_api(request: SearchRequest):
             else:
                 display_salary = metadata.get('salary_original', 'Thỏa thuận')
 
-            # Lấy thông tin location từ DB RAM
-            location = "Chưa cập nhật địa điểm"
-            if job_id in jobs_database:
-                location = jobs_database[job_id].get("location", "Chưa cập nhật địa điểm")
-            
-            # --- 1. TÍNH TOÁN DATA CHO BIỂU ĐỒ LƯƠNG ---
+            # --- 3. TÍNH TOÁN DATA CHO BIỂU ĐỒ LƯƠNG ---
             if raw_avg > 0:
-                short_loc = location.split(',')[0].split('-')[0].strip() # Lấy tỉnh thành đầu tiên
+                short_loc = location.split(',')[0].split('-')[0].strip() 
+                if not short_loc:
+                    short_loc = "Thỏa thuận"
+                    
                 if short_loc not in location_stats:
                     location_stats[short_loc] = {"total": 0, "count": 0}
                 location_stats[short_loc]["total"] += raw_avg
                 location_stats[short_loc]["count"] += 1
 
-            # --- 2. TÍNH TOÁN DATA CHO BIỂU ĐỒ SKILL ---
+            # --- 4. TÍNH TOÁN DATA CHO BIỂU ĐỒ SKILL ---
             skills_str = metadata.get('skills', '')
             if skills_str:
                 job_skills = [s.strip() for s in skills_str.split(',') if s.strip()]
@@ -136,18 +155,11 @@ async def search_jobs_api(request: SearchRequest):
                 "salary": display_salary, 
                 "experience_level": metadata.get('experience_level', ''),
                 "skills": skills_str,
-                "job_title": "Chưa cập nhật",
-                "job_description": "Không có mô tả chi tiết.",
-                "url": "#",
+                "job_title": job_title,
+                "job_description": raw_job.get("job_description", "Không có mô tả chi tiết."),
+                "url": raw_job.get("url", "#"),
                 "location": location
             }
-            
-            if job_id in jobs_database:
-                raw_job = jobs_database[job_id]
-                job_info["job_title"] = raw_job.get("job_title", job_info["job_title"])
-                job_info["job_description"] = raw_job.get("job_description", job_info["job_description"])
-                job_info["url"] = raw_job.get("url", job_info["url"])
-
             jobs_data.append(job_info)
 
         # Chốt danh sách Skill cho biểu đồ
@@ -164,7 +176,6 @@ async def search_jobs_api(request: SearchRequest):
                 })
         salary_chart_data.sort(key=lambda x: x["average_salary"], reverse=True)
 
-        # Trả về TẤT CẢ trong 1 lần gọi API duy nhất!
         return {
             "status": "success", 
             "data": jobs_data, 
